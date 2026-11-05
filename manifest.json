@@ -1,0 +1,78 @@
+{
+  "protocol": 1,
+  "id": "lyra",
+  "name": "Lyra",
+  "description": "Your library of films and series: watchlist, episode tracking, history and upcoming releases, with metadata from TMDB.",
+  "version": "0.1.1",
+  "publisher": {
+    "name": "Aureate Empyrean",
+    "originalAuthors": [
+      "Aureate Empyrean contributors"
+    ]
+  },
+  "repository": "https://github.com/Aureate-Empyrean/lyra",
+  "license": "AGPL-3.0-or-later",
+  "nexus": ">=0.1.8,<0.2.0",
+  "container": {
+    "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "port": 16333
+  },
+  "capabilities": [
+    "ui.application",
+    "storage.data",
+    "network.egress",
+    "events.publish",
+    "references.read",
+    "references.resolve"
+  ],
+  "routes": {
+    "ui": "/",
+    "api": "/api",
+    "health": "/health"
+  },
+  "icon": "/icon.svg",
+  "events": {
+    "produces": [
+      "lyra.dated-items.changed"
+    ],
+    "consumes": []
+  },
+  "resources": [
+    {
+      "type": "movie",
+      "resolvable": true
+    },
+    {
+      "type": "series",
+      "resolvable": true
+    },
+    {
+      "type": "season",
+      "resolvable": true
+    },
+    {
+      "type": "episode",
+      "resolvable": true
+    }
+  ],
+  "references": {
+    "version": 2,
+    "read": [],
+    "resolve": [
+      {
+        "module": "chronos",
+        "type": "event"
+      }
+    ]
+  },
+  "projections": {
+    "version": 1,
+    "provides": [
+      "dated-items"
+    ],
+    "read": []
+  },
+  "backup": {
+    "version": 1
+  }
+}

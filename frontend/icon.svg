@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Lyra application icon: the header's lyre mark on its lavender-to-indigo tile.
+       Full-bleed square; the host applies the corner radius. -->
+  <defs>
+    <linearGradient id="tile" x1=".25" y1=".07" x2=".75" y2=".93">
+      <stop offset="0" stop-color="#e6c2f1"/>
+      <stop offset=".45" stop-color="#c98be0"/>
+      <stop offset="1" stop-color="#6c63e8"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx=".3" cy=".25" r=".45">
+      <stop offset="0" stop-color="#fff" stop-opacity=".4"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="48" height="48" fill="url(#tile)"/>
+  <rect width="48" height="48" fill="url(#sheen)"/>
+  <g transform="translate(8.84 8.84) scale(1.263)" fill="none" stroke="#1a0f20" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7.5 4.5c-2.2 2.6-2.7 6.4-1 9.6 1.3 2.4 3.4 3.9 5.5 4.4M16.5 4.5c2.2 2.6 2.7 6.4 1 9.6-1.3 2.4-3.4 3.9-5.5 4.4"/>
+    <path d="M9.5 8v8M12 7v10M14.5 8v8"/>
+    <circle cx="12" cy="3.6" r="1.1" fill="#1a0f20" stroke="none"/>
+    <circle cx="6.4" cy="4.2" r=".8" fill="#1a0f20" stroke="none"/>
+    <circle cx="17.6" cy="4.2" r=".8" fill="#1a0f20" stroke="none"/>
+  </g>
+</svg>
