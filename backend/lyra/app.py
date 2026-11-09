@@ -1380,6 +1380,14 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             .read_text(encoding="utf-8")
             .replace("/*CATALOGS*/ {}", json.dumps(catalogs()).replace("<", "\\u003c"))
         )
+        # Nexus navigation contract: the shared SDK, then Lyra's adapter.
+        script = "\n".join(
+            [
+                script,
+                (ROOT / "frontend/vendor/nexus-navigation.js").read_text(encoding="utf-8"),
+                (ROOT / "frontend/navigation.js").read_text(encoding="utf-8"),
+            ]
+        )
         html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
         return html.replace("/*STYLE*/", style).replace("/*SCRIPT*/", script)
 

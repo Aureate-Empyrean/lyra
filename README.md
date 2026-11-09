@@ -64,6 +64,14 @@ Lyra uses token set 2.1 and foundation 1.1 (architecture ADR 0012, ADR 0014) wit
 
 Its application icon (0.1.1) is the header's lyre mark on its lavender-to-indigo tile, served at `/icon.svg` for Nexus (manifest `icon`).
 
+## Navigation (0.2.0 on aetest)
+
+Lyra's views and titles are browser history entries through the Nexus navigation contract (`frontend/navigation.js`,
+references `/`, `/series`, `/movies`, `/discover`, `/history`, `/series/<id>`, `/movie/<id>`, `/preview/<kind>/<tmdb>`).
+Search text and filters are private per-entry state. The arrow on a title goes up to its list; browser Back is the
+traversal. Notes are saved on the way out, or kept as a draft if that fails. See
+`../empyrean-nexus/docs/navigation-history.md`.
+
 ## Run through Nexus
 
 0.1.3 (production since 2026-11-09) opens a title from a deep link. 0.1.2 adds a [Linked from other modules](../architecture/concepts/backlinks.md) panel on titles ([record](../VALIDATION_PHASE4_AETEST_2026-11-09.md)).

@@ -249,14 +249,22 @@ function renderShell() {
     if (e.key === "Enter") runSearch(true);
   });
 }
-function navigate(route, { push = true } = {}) {
+/** Inside a Nexus with the navigation contract every move is a browser history entry and is
+ * shown when Nexus confirms it (frontend/navigation.js); otherwise it is shown directly. */
+function navigate(route, { push = true, mode = "push" } = {}) {
+  $("#app").classList.remove("nav-open");
+  if (lyraNavigation.enabled) return commitRoute(route, mode);
   if (push) state.history.push(state.route);
   state.route = route;
-  $("#app").classList.remove("nav-open");
   render();
   $("#main").scrollTop = 0;
 }
+/** The arrow on a title: up to the list it was opened from. Browser Back is the traversal. */
 function back() {
+  if (lyraNavigation.enabled) {
+    const from = state.route.from;
+    return navigate({ view: ["home", "series", "movies", "discover", "history"].includes(from) ? from : state.route.type === "movie" ? "movies" : "series" });
+  }
   navigate(state.history.pop() || { view: "home" }, { push: false });
 }
 async function render() {
@@ -270,6 +278,11 @@ async function render() {
   view.innerHTML = `<div class="page">${skeleton()}</div>`;
   const token = Symbol();
   render.token = token;
+  const notFound = () => {
+    view.innerHTML = `<div class="page"><div class="ae-empty">${icon("alert")}<h3>${esc(t("This page could not be found"))}</h3><p>${esc(t("The address may be wrong, or the title may have been removed."))}</p><button class="ae-btn" data-nav="home">${esc(t("Up next"))}</button></div></div>`;
+    return "not-found";
+  };
+  if (route.view === "not-found") return notFound();
   try {
     const html = await ({ home: homeView, series: () => libraryView("series"), movies: () => libraryView("movie"), discover: discoverView, history: historyView, title: titleView })[route.view]();
     if (render.token !== token) return;
@@ -279,6 +292,7 @@ async function render() {
     afterRender[route.view]?.();
   } catch (error) {
     if (render.token !== token) return;
+    if (/not found/i.test(error.message)) return notFound();
     view.innerHTML = `<div class="page"><div class="ae-banner ae-banner--danger">${icon("alert")}<div><strong>${esc(t("This page could not be loaded."))}</strong><br>${esc(error.message)}</div><button class="ae-btn ae-btn--sm" data-act="reload">${esc(t("Try again"))}</button></div></div>`;
   }
 }
@@ -376,6 +390,7 @@ async function discoverView() {
 let searchTimer;
 function onSearch(event) {
   state.query = event.target.value;
+  lyraNavigation.viewChanged();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => runSearch(false), 350);
 }
@@ -732,8 +747,12 @@ document.addEventListener("click", async (event) => {
   const nav = event.target.closest("[data-nav]");
   if (nav) {
     if (nav.dataset.nav !== "discover") {
-      state.query = "";
-      $("#search").value = "";
+      // Via Nexus the search is cleared once this entry's view state has been recorded with it.
+      if (lyraNavigation.enabled) clearSearchOnApply = true;
+      else {
+        state.query = "";
+        $("#search").value = "";
+      }
     }
     return navigate({ view: nav.dataset.nav });
   }
@@ -755,6 +774,7 @@ document.addEventListener("click", async (event) => {
   const filter = event.target.closest("[data-filter]");
   if (filter) {
     state.filter[filter.dataset.type] = filter.dataset.filter;
+    lyraNavigation.viewChanged();
     return render();
   }
   const target = event.target.closest("[data-act]");
@@ -772,6 +792,7 @@ document.addEventListener("click", async (event) => {
     if (!result) return target.classList.remove("is-busy");
     await reloadState();
     toast(t("Added {title}", { title: result.title }));
+    if (lyraNavigation.enabled) return navigate({ view: "title", type: result.type, id: result.id, from: state.route.from }, { mode: "replace" });
     state.route = { view: "title", type: result.type, id: result.id, from: state.route.from };
     return render();
   }
@@ -844,7 +865,8 @@ document.addEventListener(
     const [type, id] = notes.dataset.notes.split(":");
     if (state.title?.library?.notes === notes.value) return;
     const result = await attempt(() => api(`/library/${type}/${id}`, "PUT", { notes: notes.value }), t("Notes saved"));
-    if (result) state.title = result;
+    // A response that arrives after a move to another title belongs to the old one.
+    if (result && state.route.id === id) state.title = result;
   },
   true,
 );
@@ -886,10 +908,21 @@ async function start() {
     $("#app").innerHTML = `<div class="ae-empty">${icon("alert")}<h3>${esc(t("Lyra could not start"))}</h3><p>${esc(error.message)}</p></div>`;
     return;
   }
+  renderShell();
+  // Inside a Nexus that supports it, the browser URL and Back/Forward follow Lyra's screens.
+  if (state.context.navigation?.versions?.includes(1)) {
+    try {
+      if (await lyraNavigation.start(state.context)) {
+        if (shownRoute) await queueNavigation(shownRoute, "replace").catch(() => {});
+        return;
+      }
+    } catch {
+      /* the host did not answer the handshake: keep the in-memory navigation below */
+    }
+  }
   // A link to one title, from another module (open_path of the resolver).
   const deep = location.pathname.match(/\/(movie|series)\/([0-9a-f-]{36})$/);
   if (deep) state.route = { view: "title", type: deep[1], id: deep[2], from: "library" };
-  renderShell();
   render();
 }
 start();
