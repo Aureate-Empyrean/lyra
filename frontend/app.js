@@ -458,6 +458,7 @@ function sidePanels(data) {
     ${data.library ? `<section class="panel"><h3>${esc(t("Your rating"))}</h3>${ratingHtml(data.library, data.type, data.id)}</section>` : ""}
     ${data.library ? `<section class="panel"><h3>${esc(t("Notes"))}</h3><textarea class="ae-textarea notes" data-notes="${data.type}:${esc(data.id)}" maxlength="10000" placeholder="${esc(t("Only you see these."))}">${esc(data.library.notes)}</textarea></section>` : ""}
     ${data.library ? `<section class="panel"><h3>${esc(t("Calendar"))}</h3><select class="ae-select" data-act="calendar" data-type="${data.type}" data-id="${esc(data.id)}"><option value="default" ${data.library.calendar === "default" ? "selected" : ""}>${esc(t("Follow sharing settings"))}</option><option value="always" ${data.library.calendar === "always" ? "selected" : ""}>${esc(t("Always share dates with Chronos"))}</option><option value="never" ${data.library.calendar === "never" ? "selected" : ""}>${esc(t("Never share dates"))}</option></select><div id="planned" class="ae-meta" style="margin-top:10px"></div></section>` : ""}
+    <section class="panel" id="linked-panel" hidden><h3>${esc(t("Linked from other modules"))}</h3><div id="linked-from"></div><p class="ae-meta">${esc(t("These items belong to their modules."))}</p></section>
     <section class="panel"><h3>${esc(t("Details"))}</h3><dl class="facts">${crew.map((c) => `<div><dt>${esc(c.job)}</dt><dd>${esc(c.name)}</dd></div>`).join("")}${data.networks?.length ? `<div><dt>${esc(t("Network"))}</dt><dd>${esc(data.networks.join(", "))}</dd></div>` : ""}${data.original_title && data.original_title !== data.title ? `<div><dt>${esc(t("Original title"))}</dt><dd>${esc(data.original_title)}</dd></div>` : ""}<div><dt>TMDB</dt><dd class="ae-mono">${esc(ext.tmdb || "—")}</dd></div>${ext.imdb ? `<div><dt>IMDb</dt><dd class="ae-mono">${esc(ext.imdb)}</dd></div>` : ""}<div><dt>${esc(t("Updated"))}</dt><dd>${data.refreshing ? esc(t("Refreshing…")) : data.refreshed_at ? esc(fmtWhen(data.refreshed_at)) : "—"}</dd></div></dl></section>
   </aside>`;
 }
@@ -508,9 +509,27 @@ function seriesHtml(s) {
     <section class="section"><div class="section-head"><h2>${esc(t("Seasons"))}</h2>${s.refreshing ? `<span class="ae-meta">${esc(t("Loading all seasons…"))}</span>` : ""}</div>${seasons ? `<div class="seasons ae-surface">${seasons}</div>` : `<p class="ae-meta">${esc(t("TMDB lists no seasons yet."))}</p>`}</section>
     ${cast}<p class="attribution">${esc(state.app.attribution)}</p></div>${sidePanels(s)}</div>`;
 }
+const LINKED_KIND = { "chronos:event": "Event in Chronos" };
+async function loadLinkedFrom(data) {
+  const result = await api(`/${data.type}/${data.id}/linked-from`).catch(() => null);
+  const box = $("#linked-from");
+  if (!box || !result || result.availability !== "available" || !result.items.length) return;
+  box.innerHTML = result.items.map((x) => {
+    const gone = x.availability !== "available";
+    const note = x.availability === "deleted" ? t("deleted there") : ["forbidden", "not_found", "not_resolvable"].includes(x.availability) ? t("not available") : gone ? t("not available right now") : "";
+    const open = !gone && state.context.applications.some((a) => a.id === x.module) ? `<button class="ae-btn ae-btn--quiet ae-btn--icon" data-open-module="${esc(x.module)}" data-path="${esc(x.open_path || "")}" aria-label="${esc(t("Open"))}">${icon("open")}</button>` : "";
+    return `<div class="linked-row${gone ? " is-gone" : ""}"><div><strong>${esc(gone ? t("Something linked here") : x.label)}</strong><div class="ae-meta">${esc([t(LINKED_KIND[`${x.module}:${x.type}`] || "Linked from another module"), note].filter(Boolean).join(" · "))}</div></div>${open}</div>`;
+  }).join("");
+  $("#linked-panel").hidden = false;
+}
+document.addEventListener("click", (event) => {
+  const el = event.target.closest("[data-open-module]");
+  if (el) bridge("navigate", { module: el.dataset.openModule, ...(el.dataset.path ? { path: el.dataset.path } : {}) }).catch((e) => toast(e.message, "danger"));
+});
 afterRender.title = async () => {
   const data = state.title;
   if (!data || state.route.preview) return;
+  loadLinkedFrom(data);
   if (data.refreshing) setTimeout(() => state.route.view === "title" && state.route.id === data.id && refreshTitle(), 2500);
   const box = $("#planned");
   if (!box) return;
@@ -867,6 +886,9 @@ async function start() {
     $("#app").innerHTML = `<div class="ae-empty">${icon("alert")}<h3>${esc(t("Lyra could not start"))}</h3><p>${esc(error.message)}</p></div>`;
     return;
   }
+  // A link to one title, from another module (open_path of the resolver).
+  const deep = location.pathname.match(/\/(movie|series)\/([0-9a-f-]{36})$/);
+  if (deep) state.route = { view: "title", type: deep[1], id: deep[2], from: "library" };
   renderShell();
   render();
 }

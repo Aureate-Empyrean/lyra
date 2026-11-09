@@ -66,6 +66,8 @@ Its application icon (0.1.1) is the header's lyre mark on its lavender-to-indigo
 
 ## Run through Nexus
 
+0.1.3 (production since 2026-11-09) opens a title from a deep link. 0.1.2 adds a [Linked from other modules](../architecture/concepts/backlinks.md) panel on titles ([record](../VALIDATION_PHASE4_AETEST_2026-11-09.md)).
+
 Requires Nexus 0.1.8 or later within 0.1.x (0.1.1 declares an application icon). Port 16333.
 
 ```sh

@@ -1041,10 +1041,8 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                 raise HTTPException(404, "Not found")
         return {"refreshing": True}
 
-    @app.get("/api/{resource_type}/{rid}/planned")
-    def planned(resource_type: str, rid: str):
-        """Chronos events about this title (or its next episodes), shared with Lyra."""
-        kind_table(resource_type)
+    def title_targets(resource_type, rid):
+        """A title, and for a series its next episodes: what links about it may point to."""
         targets = [reference(resource_type, rid)]
         if resource_type == "series":
             with db.connect() as conn:
@@ -1055,9 +1053,46 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                         (rid, (clock().date() - timedelta(days=14)).isoformat()),
                     )
                 ]
+        return targets
+
+    @app.get("/api/{resource_type}/{rid}/linked-from")
+    def linked_from(resource_type: str, rid: str):
+        """Backlinks standard (concepts/backlinks.md): every item in another module that links to
+        this title, or to one of a series' current episodes, and shares it with Lyra, labelled
+        by its owner. Never raises."""
+        kind_table(resource_type)
+        edges, seen = [], set()
+        try:
+            for target in title_targets(resource_type, rid):
+                page = nexus.request("GET", "/references", params={"resource": target, "direction": "incoming"})
+                edges += page.get("references") or []
+        except (httpx.HTTPError, KeyError, ValueError):
+            return {"availability": "nexus_unreachable", "items": []}
+        items = []
+        for edge in edges:
+            parts = edge.get("source", "").split(":")
+            if len(parts) != 5 or parts[2] == "lyra" or edge["source"] in seen:
+                continue
+            seen.add(edge["source"])
+            entry = {"source": edge["source"], "module": parts[2], "type": parts[3], "label": "", "availability": "unknown"}
+            try:
+                out = nexus.request("POST", "/resources/resolve", {"resource": edge["source"]})
+                entry["availability"] = out.get("availability") or "unknown"
+                if entry["availability"] == "available":
+                    entry["label"] = str(out.get("label") or "")[:200]
+                    entry["open_path"] = (out.get("open") or {}).get("module_path")
+            except Exception:
+                entry["availability"] = "temporarily_unavailable"
+            items.append(entry)
+        return {"availability": "available", "items": items}
+
+    @app.get("/api/{resource_type}/{rid}/planned")
+    def planned(resource_type: str, rid: str):
+        """Chronos events about this title (or its next episodes), shared with Lyra."""
+        kind_table(resource_type)
         events, available = [], True
         try:
-            for target in targets:
+            for target in title_targets(resource_type, rid):
                 page = nexus.request(
                     "GET", "/references", params={"resource": target, "direction": "incoming"}
                 )

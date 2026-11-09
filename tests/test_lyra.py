@@ -570,3 +570,22 @@ def test_serves_its_application_icon(env):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/svg+xml")
     assert response.text.lstrip().startswith("<svg") and "<script" not in response.text
+
+
+def test_backlinks_show_every_shared_link(ready):
+    client, _, _, nexus, _ = ready
+    movie = client.post("/api/library", json={"kind": "movie", "tmdb_id": 603, "status": "planned"}).json()
+    rid = movie.get("id") or movie["movie"]["id"]
+    target = f"nexus:v1:lyra:movie:{rid}"
+    event = "nexus:v1:chronos:event:0190f0e4-0000-7000-8000-000000000001"
+    other = "nexus:v1:mnemosyne:note:0190f0e4-0000-7000-8000-000000000002"
+    nexus.edges[target] = [
+        {"source": event, "relation": "chronos.about"},
+        {"source": other, "relation": "mnemosyne.related"},
+        {"source": target, "relation": "lyra.self"},
+    ]
+    got = client.get(f"/api/movie/{rid}/linked-from").json()
+    assert got["availability"] == "available"
+    assert [x["module"] for x in got["items"]] == ["chronos", "mnemosyne"]
+    assert got["items"][0]["label"] == "Watch together"
+

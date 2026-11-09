@@ -1312,3 +1312,15 @@ body {
     padding: var(--space-6) var(--space-5);
   }
 }
+
+/* Backlinks standard. */
+.linked-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+}
+.linked-row.is-gone {
+  opacity: 0.68;
+}
