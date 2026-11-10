@@ -186,5 +186,15 @@
   "{n}/10": "{n}/10",
   "{watched} of {total}": "{watched} of {total}",
   "{watched} of {total} episodes": "{watched} of {total} episodes",
-  "{watched} of {total} episodes watched": "{watched} of {total} episodes watched"
+  "{watched} of {total} episodes watched": "{watched} of {total} episodes watched",
+  "Browse TMDB recommendations": "Browse TMDB recommendations",
+  "External discovery": "External discovery",
+  "Load details from TMDB": "Load details from TMDB",
+  "Loading from TMDB…": "Loading from TMDB…",
+  "Search TMDB": "Search TMDB",
+  "Search your library": "Search your library",
+  "TMDB is an external service. Loading sends language, region or the selected title ID to TMDB.": "TMDB is an external service. Loading sends language, region or the selected title ID to TMDB.",
+  "Title preview": "Title preview",
+  "Your library search stays local. Only Search TMDB sends these words to TMDB.": "Your library search stays local. Only Search TMDB sends these words to TMDB.",
+  "Your library stays searchable. External discovery and metadata updates stop until you add a credential again.": "Your library stays searchable. External discovery and metadata updates stop until you add a credential again."
 }

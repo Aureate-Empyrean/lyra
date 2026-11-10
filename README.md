@@ -15,8 +15,10 @@ not implemented. Canonical architecture: `../architecture/modules/lyra.md` (ADR 
   watched one; rewatches; completion is suggested, never forced.
 - **Movies**: watchlist and watched with viewing history (rewatches kept).
 - Personal rating (1–10), notes, per-title calendar sharing, "Planned in Chronos" backlinks.
-- **Discover**: TMDB search (clearly separated from your library results), trending, upcoming
-  cinema releases (your region), series on the air. Previews are not stored until you act.
+- **Search your library** stays local, including empty results and rapid typing.
+- **Discover**: explicitly choose **Search TMDB** for the current words, or **Browse TMDB
+  recommendations** for trending, upcoming cinema releases (your region) and series on the air.
+  Preview pages require **Load details from TMDB**. Previews are not stored until you add them.
 - History grouped by day, with per-entry removal.
 - Release dates: date-only; theatrical, digital and disc dates for your release region,
   falling back to TMDB's primary date marked *estimated*; future dates are *may change*.
@@ -45,6 +47,19 @@ stills are fetched by the server and cached in `/data/images`. Lyra keeps workin
 data when TMDB is unavailable. Requests are limited to 4 concurrent calls, retried on 429 with
 `Retry-After`, 10 s timeout. Library titles refresh in the background (watching 12 h, planned
 24 h, ended 14 days; upcoming movies daily) and on demand.
+
+Opening/restoring Discover or a preview, refreshing, and Back/Forward never authorize a new
+provider lookup. External results are transient; changing the query or leaving the screen
+requires another explicit action. Ordinary rendering reads cached artwork only, with a
+placeholder for missing images; explicit discovery may fetch and cache provider artwork.
+An already forwarded provider request cannot be cancelled by the existing Nexus bridge, but
+obsolete results are ignored and no further artwork batches are sent. Existing authorized
+background metadata refresh, credential verification and explicit add/refresh actions are unchanged.
+
+`GET /api/search?q=…` keeps its local/remote response envelope, always returning an empty
+remote list. Explicit search uses `POST /api/search/external` with a bounded `query` JSON body;
+the provider query is not added to browser navigation URLs. `POST /api/images` supports
+`cached_only: true` to forbid a provider fetch on a cache miss.
 
 This product uses the TMDB API but is not endorsed or certified by TMDB. (The attribution is
 shown in Discover, search, title pages and Settings; TMDB's logo is not bundled.)
@@ -104,6 +119,14 @@ that preserves personal data and identities, projection rules (policies, premier
 fallback, certainty, paging), resolver and backlinks, history, image data URIs and caching,
 provider outage, backup without the credential, shared design files. A live TMDB request has
 not been verified in this repository's test runs (no credential was available).
+
+The isolated real-browser privacy suite uses the actual Lyra backend, unchanged P1 SDK/adapter,
+and a synthetic TMDB HTTP server over loopback sockets. It creates temporary data, random ports,
+and synthetic credentials; it cannot contact aetest, Exodus or the live provider. With Playwright
+and Chromium installed, run `node --test tests/e2e/privacy_search.cjs`. It reuses the workspace's
+Playwright by default; set `PLAYWRIGHT_PATH` for another installation and `PYTHON` for a non-Windows
+virtual-environment executable. It verifies provider HTTP counts, actual browser requests, explicit
+search/recommendations/preview/add, errors, stale responses, private state restoration and filters.
 
 ## Localization
 

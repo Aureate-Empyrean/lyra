@@ -193,16 +193,19 @@ function art(key, title, className = "poster") {
   const image = cached ? `background-image:url('${cached}');` : "";
   return `<div class="art ${className}${cached ? " loaded" : ""}" ${key ? `data-img="${esc(key)}"` : ""} style="${image}--h:${hue(title)}" role="img" aria-label="${esc(title)}"><span class="art-fallback" aria-hidden="true"><span class="art-orbit"></span><span class="art-title">${esc(title)}</span></span></div>`;
 }
-function hydrateImages() {
+function hydrateImages(allowRemote = false) {
   clearTimeout(imageTimer);
+  const token = render.token;
+  const intent = externalRequest;
   imageTimer = setTimeout(async () => {
+    if (render.token !== token || externalRequest !== intent) return;
     const wanted = [...new Set($$("[data-img]:not(.loaded)").map((el) => el.dataset.img))].filter((k) => !state.images.has(k));
     for (let i = 0; i < wanted.length; i += 12) {
       const keys = wanted.slice(i, i + 12);
-      const result = await api("/images", "POST", { keys }).catch(() => null);
-      if (!result) return;
+      if (render.token !== token || externalRequest !== intent) return;
+      const result = await api("/images", "POST", { keys, cached_only: !allowRemote }).catch(() => null);
+      if (!result || render.token !== token || externalRequest !== intent) return;
       for (const [key, uri] of Object.entries(result.images)) state.images.set(key, uri);
-      keys.forEach((k) => state.images.has(k) || state.images.set(k, null));
       applyImages();
     }
     applyImages();
@@ -239,7 +242,7 @@ function renderShell() {
       <header class="topbar"><div class="topbar-inner ae-surface">
         <button class="ae-btn ae-btn--quiet ae-btn--icon menu-toggle" data-act="nav" aria-label="${esc(t("Menu"))}">${icon("menu")}</button>
         <button class="ae-btn ae-btn--quiet ae-btn--icon" data-act="back" id="back" hidden aria-label="${esc(t("Back"))}">${icon("back")}</button>
-        <label class="search">${icon("search")}<span class="ae-visually-hidden">${esc(t("Search films and series"))}</span><input class="ae-input" id="search" type="search" placeholder="${esc(t("Search your library and TMDB"))}" autocomplete="off"></label>
+        <label class="search">${icon("search")}<span class="ae-visually-hidden">${esc(t("Search your library"))}</span><input class="ae-input" id="search" type="search" placeholder="${esc(t("Search your library"))}" autocomplete="off" maxlength="200"></label>
         <span class="spacer"></span>
       </div></header>
       <div id="view"></div>
@@ -381,14 +384,53 @@ async function libraryView(type) {
 async function discoverView() {
   if (state.query.trim().length >= 2) return searchView();
   if (!state.app.tmdb.configured) return `<div class="page"><h1 class="page-title">${esc(t("Discover"))}</h1>${onboarding()}</div>`;
-  const data = await api("/discover");
+  return `<div class="page"><h1 class="page-title">${esc(t("Discover"))}</h1>${externalSection("tmdb-discover")}</div>`;
+}
+function discoveryHtml(data) {
   const titles = { trending: t("Trending this week"), upcoming: t("Coming to cinemas"), on_the_air: t("Series airing now") };
-  return `<div class="page"><h1 class="page-title">${esc(t("Discover"))}</h1><p class="ae-meta" style="margin-top:-12px">${esc(t("Suggestions come from TMDB. Lyra sends it only your search text, language and region."))}</p>
-    ${data.sections.map((s) => `<section class="section"><div class="section-head"><h2>${esc(titles[s.key])}</h2></div>${s.error ? `<div class="ae-banner ae-banner--warn">${icon("alert")}<div>${esc(s.error)}</div></div>` : `<div class="rail">${s.items.map(cardHtml).join("")}</div>`}</section>`).join("")}
-    <p class="attribution">${esc(state.app.attribution)}</p></div>`;
+  return data.sections.map((s) => `<section class="section"><div class="section-head"><h2>${esc(titles[s.key])}</h2></div>${s.error ? `<div class="ae-banner ae-banner--warn">${icon("alert")}<div>${esc(s.error)}</div></div>` : `<div class="rail">${s.items.map(cardHtml).join("")}</div>`}</section>`).join("");
+}
+function externalSection(action) {
+  const labels = { "tmdb-search": t("Search TMDB"), "tmdb-discover": t("Browse TMDB recommendations"), "tmdb-preview": t("Load details from TMDB") };
+  const hint = action === "tmdb-search" ? t("Your library search stays local. Only Search TMDB sends these words to TMDB.") : t("TMDB is an external service. Loading sends language, region or the selected title ID to TMDB.");
+  return `<section class="section" id="external-section"><div class="section-head"><h2>${esc(t("From TMDB"))}</h2><span class="ae-meta">${esc(t("External discovery"))}</span></div><p class="ae-meta">${esc(hint)}</p>${state.app.tmdb.configured ? `<button class="ae-btn" data-act="${action}">${esc(labels[action])}</button>` : onboarding()}<div id="external-results" class="external-results" aria-live="polite"></div><p class="attribution">${esc(state.app.attribution)}</p></section>`;
+}
+// Intent is never persisted in navigation state. Each new render requires a new action.
+let externalRequest = 0;
+function invalidateExternal() {
+  externalRequest++;
+  clearTimeout(imageTimer);
+  const results = $("#external-results");
+  if (results) results.replaceChildren();
+  $$("[data-act^='tmdb-']").forEach((button) => { button.disabled = button.dataset.act === "tmdb-search"; });
+}
+async function loadExternal(action, button) {
+  if (button.disabled) return;
+  const token = render.token;
+  const route = state.route;
+  const query = state.query.trim();
+  const request = ++externalRequest;
+  const results = $("#external-results");
+  if (!results) return;
+  const current = () => request === externalRequest && render.token === token && state.route === route && state.query.trim() === query && results.isConnected;
+  button.disabled = true;
+  results.textContent = t("Loading from TMDB…");
+  try {
+    const data = action === "tmdb-search" ? await api("/search/external", "POST", { query }) : action === "tmdb-discover" ? await api("/discover") : await api(`/preview/${route.kind}/${route.tmdb_id}`);
+    if (!current()) return;
+    if (data.resource) return navigate({ view: "title", type: data.resource.type, id: data.resource.id, from: route.from }, { mode: "replace" });
+    if (data.remote_error) throw Error(data.remote_error === "not_configured" ? t("Add TMDB credential") : data.remote_error);
+    results.innerHTML = action === "tmdb-search" ? (data.remote.length ? `<div class="grid">${data.remote.map(cardHtml).join("")}</div>` : `<p class="ae-meta">${esc(t("TMDB found nothing for “{query}”.", { query }))}</p>`) : action === "tmdb-discover" ? discoveryHtml(data) : previewHtml(data.preview);
+    hydrateImages(true);
+  } catch (error) {
+    if (current()) results.innerHTML = `<p class="ae-error-text" role="alert">${esc(error.message || t("Something went wrong."))}</p>`;
+  } finally {
+    if (current()) button.disabled = false;
+  }
 }
 let searchTimer;
 function onSearch(event) {
+  invalidateExternal();
   state.query = event.target.value;
   lyraNavigation.viewChanged();
   clearTimeout(searchTimer);
@@ -405,11 +447,9 @@ function runSearch(force) {
 async function searchView() {
   const query = state.query.trim();
   const data = await api("/search?q=" + encodeURIComponent(query));
-  const remote = data.remote_error === "not_configured" ? onboarding() : data.remote_error ? `<div class="ae-banner ae-banner--warn">${icon("alert")}<div>${esc(data.remote_error)}</div></div>` : data.remote.length ? `<div class="grid">${data.remote.map(cardHtml).join("")}</div>` : `<p class="ae-meta">${esc(t("TMDB found nothing for “{query}”.", { query }))}</p>`;
   return `<div class="page"><h1 class="page-title">${esc(t("Results for “{query}”", { query }))}</h1>
     <section class="section"><div class="section-head"><h2>${esc(t("In your library"))}</h2></div>${data.local.length ? `<div class="grid">${data.local.map(cardHtml).join("")}</div>` : `<p class="ae-meta">${esc(t("Nothing in your library matches."))}</p>`}</section>
-    <section class="section"><div class="section-head"><h2>${esc(t("From TMDB"))}</h2><span class="ae-meta">${esc(t("External search"))}</span></div>${remote}</section>
-    <p class="attribution">${esc(state.app.attribution)}</p></div>`;
+    ${externalSection("tmdb-search")}</div>`;
 }
 
 async function historyView() {
@@ -428,12 +468,7 @@ async function historyView() {
 async function titleView() {
   const route = state.route;
   if (route.preview) {
-    const result = await api(`/preview/${route.kind}/${route.tmdb_id}`);
-    if (result.resource) {
-      state.route = { view: "title", type: result.resource.type, id: result.resource.id, from: route.from };
-      return titleView();
-    }
-    return previewHtml(result.preview);
+    return `<div class="page"><h1 class="page-title">${esc(t("Title preview"))}</h1>${externalSection("tmdb-preview")}</div>`;
   }
   const data = await api(route.type === "movie" ? `/movies/${route.id}` : `/series/${route.id}`);
   state.title = data;
@@ -694,7 +729,7 @@ function settingsDialog() {
     }
   };
   $("#remove-credential", root)?.addEventListener("click", () =>
-    confirmAction(t("Remove the TMDB credential?"), t("Your library stays. Search, discovery and metadata updates stop until you add a credential again."), t("Remove"), async () => {
+    confirmAction(t("Remove the TMDB credential?"), t("Your library stays searchable. External discovery and metadata updates stop until you add a credential again."), t("Remove"), async () => {
       await attempt(() => api("/credential", "DELETE"));
       await reloadState();
       render();
@@ -780,6 +815,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-act]");
   if (!target) return;
   const { act, id } = target.dataset;
+  if (["tmdb-search", "tmdb-discover", "tmdb-preview"].includes(act)) return loadExternal(act, target);
   if (act === "nav") return $("#app").classList.toggle("nav-open");
   if (act === "back") return back();
   if (act === "settings") return settingsDialog();

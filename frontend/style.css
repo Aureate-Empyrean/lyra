@@ -213,6 +213,9 @@ body {
 .section:first-child {
   margin-top: 0;
 }
+.external-results:not(:empty) {
+  margin-top: var(--space-4);
+}
 .section-head {
   display: flex;
   align-items: baseline;

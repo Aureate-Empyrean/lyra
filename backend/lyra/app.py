@@ -100,6 +100,11 @@ class WatchBody(Strict):
 
 class ImagesBody(Strict):
     keys: list[str] = Field(max_length=24)
+    cached_only: bool = False
+
+
+class ExternalSearchBody(Strict):
+    query: str = Field(min_length=2, max_length=200)
 
 
 def styles():
@@ -732,6 +737,14 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                     (t, pattern, pattern),
                 )
             ]
+        # Ordinary library searches never disclose a query to a provider.
+        return {"local": local, "remote": [], "remote_error": None}
+
+    @app.post("/api/search/external")
+    def external_search(body: ExternalSearchBody):
+        query = body.query.strip()
+        if len(query) < 2:
+            raise HTTPException(422, "Enter at least two characters")
         remote, error = [], None
         if tmdb.configured():
             try:
@@ -742,7 +755,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                 error = str(exc)
         else:
             error = "not_configured"
-        return {"local": local, "remote": remote, "remote_error": error}
+        return {"remote": remote, "remote_error": error}
 
     @app.get("/api/discover")
     def discover():
@@ -1118,8 +1131,6 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
     @app.post("/api/images")
     def images_batch(body: ImagesBody):
         """Posters and stills as data URIs: the sandboxed interface cannot load remote images."""
-        if not tmdb.configured():
-            return {"images": {}}
 
         def load(key):
             match = re.fullmatch(r"(w\d{2,3})(/[A-Za-z0-9_-]{1,80}\.(?:jpg|jpeg|png))", key)
@@ -1130,9 +1141,11 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                 if path.exists():
                     raw = path.read_bytes()
                     media = "image/png" if raw[:4] == b"\x89PNG" else "image/jpeg"
-                else:
+                elif not body.cached_only and tmdb.configured():
                     media, raw = tmdb.image(match[1], match[2])
                     path.write_bytes(raw)
+                else:
+                    return key, None
             except (TMDBError, OSError):
                 return key, None
             return key, f"data:{media};base64," + base64.b64encode(raw).decode()

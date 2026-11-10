@@ -245,7 +245,11 @@ def test_credential_is_validated_write_only_and_private(env):
     )
     bad = client.put("/api/credential", json={"value": TOKEN.replace("c2ln", "eHh4")})
     assert bad.status_code == 401 and TOKEN not in bad.text
-    assert client.get("/api/search?q=matrix").json()["remote_error"] == "not_configured"
+    assert client.get("/api/search?q=matrix").json()["remote_error"] is None
+    assert (
+        client.post("/api/search/external", json={"query": "matrix"}).json()["remote_error"]
+        == "not_configured"
+    )
     assert client.put("/api/credential", json={"value": TOKEN}).status_code == 200
     stored = path / "secrets" / "tmdb.json"
     assert stat.S_IMODE(os.stat(stored).st_mode) & 0o077 == 0 or os.name == "nt"
@@ -254,14 +258,14 @@ def test_credential_is_validated_write_only_and_private(env):
     assert TOKEN not in json.dumps(state)
     assert "not endorsed or certified by TMDB" in state["attribution"]
     # Only search text, ids, language and region reach TMDB.
-    client.get("/api/search?q=matrix")
+    client.post("/api/search/external", json={"query": "matrix"})
     sent = provider.requests[-1].url.params
     assert set(sent) <= {"query", "language", "page", "include_adult"}
 
 
 def test_search_and_identity_mapping(ready):
     client = ready[0]
-    found = client.get("/api/search?q=matrix").json()
+    found = client.post("/api/search/external", json={"query": "matrix"}).json()
     assert [r["kind"] for r in found["remote"]] == ["movie", "tv"]  # people are ignored
     assert found["remote"][0]["resource"] is None
     movie = client.post(
@@ -274,11 +278,69 @@ def test_search_and_identity_mapping(ready):
     ).json()
     assert again["id"] == movie["id"]
     found = client.get("/api/search?q=matrix").json()
-    assert found["remote"][0]["resource"] == {"type": "movie", "id": movie["id"]}
+    assert found["remote"] == []
+    external = client.post("/api/search/external", json={"query": "matrix"}).json()
+    assert external["remote"][0]["resource"] == {"type": "movie", "id": movie["id"]}
     assert [c["id"] for c in found["local"]] == [movie["id"]]
     assert client.get("/api/preview/movie/603").json() == {
         "resource": {"type": "movie", "id": movie["id"]}
     }
+
+
+def test_local_search_and_cached_artwork_never_contact_tmdb(ready):
+    client, _, provider, _, _ = ready
+    movie = client.post(
+        "/api/library", json={"kind": "movie", "tmdb_id": 603, "status": "planned"}
+    ).json()
+    provider.requests.clear()
+    for query in ("m", "ma", "matrix", "no local match", "", "%", "_", "x" * 201):
+        result = client.get("/api/search", params={"q": query}).json()
+        assert result["remote"] == [] and result["remote_error"] is None
+    assert client.get("/api/search", params={"q": "matrix"}).json()["local"][0]["id"] == movie["id"]
+    images = client.post("/api/images", json={"keys": ["w342/matrix.jpg"], "cached_only": True})
+    assert images.json() == {"images": {}}
+    assert provider.requests == []
+
+    assert client.post("/api/images", json={"keys": ["w342/matrix.jpg"]}).json()["images"]
+    provider.requests.clear()
+    assert client.post(
+        "/api/images", json={"keys": ["w342/matrix.jpg"], "cached_only": True}
+    ).json()["images"]
+    assert provider.requests == []
+    client.delete("/api/credential")
+    assert client.post(
+        "/api/images", json={"keys": ["w342/matrix.jpg"], "cached_only": True}
+    ).json()["images"]
+    assert client.get("/api/search", params={"q": "matrix"}).json()["local"]
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize("query", ["", "a", "  ", "x" * 201])
+def test_external_search_rejects_invalid_input_without_provider_request(ready, query):
+    client, _, provider, _, _ = ready
+    provider.requests.clear()
+    assert client.post("/api/search/external", json={"query": query}).status_code == 422
+    assert provider.requests == []
+
+
+def test_external_search_failure_keeps_library_local(ready, monkeypatch):
+    from lyra.tmdb import TMDB, TMDBError
+
+    client, _, provider, _, _ = ready
+
+    def fail(*args):
+        raise TMDBError("TMDB could not be reached.")
+
+    monkeypatch.setattr(TMDB, "search", fail)
+    external = client.post("/api/search/external", json={"query": "synthetic query"})
+    assert external.status_code == 200 and external.json()["remote_error"]
+    provider.requests.clear()
+    assert client.get("/api/search", params={"q": "synthetic query"}).json() == {
+        "local": [],
+        "remote": [],
+        "remote_error": None,
+    }
+    assert provider.requests == []
 
 
 def test_same_title_by_another_provider_id_is_not_duplicated(ready):
@@ -574,7 +636,9 @@ def test_serves_its_application_icon(env):
 
 def test_backlinks_show_every_shared_link(ready):
     client, _, _, nexus, _ = ready
-    movie = client.post("/api/library", json={"kind": "movie", "tmdb_id": 603, "status": "planned"}).json()
+    movie = client.post(
+        "/api/library", json={"kind": "movie", "tmdb_id": 603, "status": "planned"}
+    ).json()
     rid = movie.get("id") or movie["movie"]["id"]
     target = f"nexus:v1:lyra:movie:{rid}"
     event = "nexus:v1:chronos:event:0190f0e4-0000-7000-8000-000000000001"
@@ -588,4 +652,3 @@ def test_backlinks_show_every_shared_link(ready):
     assert got["availability"] == "available"
     assert [x["module"] for x in got["items"]] == ["chronos", "mnemosyne"]
     assert got["items"][0]["label"] == "Watch together"
-
