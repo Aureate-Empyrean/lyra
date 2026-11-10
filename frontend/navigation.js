@@ -32,7 +32,7 @@ let lastCheckpointDirty = false;
 
 function checkpointNow() {
   if (!lyraNavigation.enabled) return Promise.resolve();
-  const value = { version: 1, dirty: retainedDrafts.size > 0, drafts: [...retainedDrafts.values()] };
+  const value = { version: 1, dirty: retainedDrafts.size > 0 || personalConflicts.size > 0, drafts: [...retainedDrafts.values()], conflicts: [...personalConflicts.values()].map(({ key, path, method, body, snapshot }) => ({ key, path, method, body, snapshot })) };
   if (!value.dirty && !lastCheckpointDirty) return Promise.resolve();
   return lyraNavigation.checkpoint(value).then(() => {
     lastCheckpointDirty = value.dirty;
@@ -42,15 +42,8 @@ function checkpointNow() {
 async function flushNotes() {
   const box = $("[data-notes]");
   if (!box || state.title?.library?.notes === box.value) return;
-  const [type, id] = box.dataset.notes.split(":");
-  const key = `${type}:${id}`;
-  try {
-    const saved = await api(`/library/${type}/${id}`, "PUT", { notes: box.value });
-    if (state.route.id === id) state.title = saved;
-    retainedDrafts.delete(key);
-  } catch {
-    retainedDrafts.set(key, { key, type, id, label: state.title?.title || "", notes: box.value, route: shownRoute });
-  }
+  try { await savePersonalNotes(box); }
+  catch { keepNoteDraft(box); }
 }
 function renderDraftTray() {
   let tray = $("#draft-tray");
@@ -73,8 +66,8 @@ function renderDraftTray() {
           const box = $(`[data-notes="${CSS.escape(`${draft.type}:${draft.id}`)}"]`);
           if (!box) throw Error("gone");
           box.value = draft.notes;
+          box.dataset.revision = draft.revision || "legacy-draft";
           box.focus();
-          retainedDrafts.delete(draft.key);
           renderDraftTray();
           checkpointNow().catch(() => {});
         } catch {
@@ -95,9 +88,13 @@ const lyraNavigation = EmpyreanNavigation.createClient({
   async apply(value, message) {
     if (message.checkpoint?.version === 1) {
       for (const draft of message.checkpoint.drafts || []) retainedDrafts.set(draft.key, draft);
+      for (const pending of message.checkpoint.conflicts || []) {
+        if (typeof pending.key === "string" && typeof pending.path === "string" && ["POST", "PUT", "DELETE"].includes(pending.method) && guardedWrite(pending.path, pending.method) && ["movie", "series", "settings"].includes(pending.snapshot?.kind) && typeof pending.snapshot.revision === "string" && (pending.body === undefined || (pending.body !== null && typeof pending.body === "object" && !Array.isArray(pending.body)))) personalConflicts.set(pending.key, pending);
+      }
       lastCheckpointDirty = !!message.checkpoint.dirty;
     }
     renderDraftTray();
+    renderPersonalConflicts();
     const next = LyraRoutes.parse(value);
     const reference = LyraRoutes.serialize(next);
     if (reference === shownRoute) return;

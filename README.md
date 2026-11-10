@@ -33,6 +33,32 @@ history or calendar choices. Episodes removed upstream are marked missing, never
 their history. Removing a title from the library deletes your data for it but keeps its
 identity, so re-adding it is the same resource.
 
+## Concurrent personal edits (0.3.0 candidate)
+
+Movies and series now have an opaque personal-data revision, independent of provider
+metadata. Notes, ratings, status/watchlist, calendar preferences, watch/unwatch, season
+progress and history removal all compare that revision atomically before writing. Library-wide
+settings have their own revision. An outdated write receives HTTP 409; an existing-record
+mutation without a revision receives HTTP 428. The request parameter is `expected_revision`;
+use the token from the record or settings snapshot the user actually edited, not a fresh
+unreviewed read immediately before saving. Initial creation of a never-tracked provider title
+can use `0`; a removed/re-added title retains its revision history and needs its current token.
+
+On conflict Lyra keeps the pending change and shows **Review latest**. Only after reviewing
+the saved values can the user choose **Apply my change after review**, which compares the
+reviewed revision again. It never forces a write or merges conflicts automatically. Removed
+records cannot be silently recreated by a stale edit. Notes and pending conflicts survive P1
+Back/Forward and refresh in the existing owner/tab-scoped draft checkpoint, with their original
+base revisions. The shared navigation SDK and routes are unchanged. Standalone/legacy-host
+navigation retains in-memory drafts; durable refresh recovery requires a supporting P1 host.
+
+Schema 1 → 2 adds `personal_revisions` and seeds existing title/settings tokens without changing
+personal records or identities. Before an upgrade, retain and validate the pre-update database
+backup; this task migrated only backed-up disposable fixtures. Schema-2 backups require the
+0.3.0 candidate or later, and restore invalidates outstanding tokens. Roll back with the previous
+image **and its pre-migration backup**, never the old image against the schema-2 database.
+See `docs/WP02B_CONCURRENT_EDITS_VALIDATION.md` for scope, tests and integration limits.
+
 ## TMDB setup
 
 1. Create a TMDB account and request an API key at <https://www.themoviedb.org/settings/api>.

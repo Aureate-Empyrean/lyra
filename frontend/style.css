@@ -1351,3 +1351,15 @@ body {
   flex: 1 1 220px;
   min-width: 0;
 }
+
+/* Conflict recovery stays visible without replacing the user's editor. */
+.personal-conflicts {
+  position: fixed; z-index: var(--z-modal, 1000); right: var(--space-4); bottom: var(--space-4);
+  width: min(680px, calc(100vw - 32px)); max-height: 65vh; overflow: auto;
+  padding: var(--space-5); border-radius: 20px; border: 1px solid var(--stroke);
+}
+.personal-conflicts h2 { font-size: 20px; margin-top: 0; }
+.personal-conflicts .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.conflict-comparison { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--space-4); }
+.conflict-comparison pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+@media (max-width: 640px) { .conflict-comparison { grid-template-columns: 1fr; } }

@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from lyra.app import ROOT, create_app  # noqa: E402
-from lyra.library import now_iso, upsert_movie  # noqa: E402
+from lyra.library import now_iso, upsert_movie, upsert_series  # noqa: E402
 from lyra.tmdb import Credential  # noqa: E402
 
 KEY = "synthetic-gateway-" * 3
@@ -151,6 +151,40 @@ def main():
                 (mid, now_iso(), now_iso()),
             )
             conn.execute("INSERT INTO settings(key,value) VALUES('defaults_set','true')")
+            sid = upsert_series(
+                conn,
+                {
+                    "id": 303,
+                    "name": "Synthetic Series",
+                    "first_air_date": "2020-01-01",
+                    "status": "Ended",
+                    "seasons": [{"season_number": 1, "episode_count": 2}],
+                },
+                {
+                    1: {
+                        "id": 404,
+                        "episodes": [
+                            {
+                                "id": 501,
+                                "episode_number": 1,
+                                "name": "Synthetic One",
+                                "air_date": "2020-01-01",
+                            },
+                            {
+                                "id": 502,
+                                "episode_number": 2,
+                                "name": "Synthetic Two",
+                                "air_date": "2020-01-02",
+                            },
+                        ],
+                    }
+                },
+                complete=True,
+            )
+            conn.execute(
+                "INSERT INTO library(resource_type,resource_id,status,added_at,updated_at) VALUES('series',?,'planned',?,?)",
+                (sid, now_iso(), now_iso()),
+            )
         app = FastAPI()
 
         @app.get("/", response_class=HTMLResponse)
@@ -167,6 +201,10 @@ def main():
         @app.get("/__fixture/counts")
         def counts():
             return COUNTS
+
+        @app.get("/__fixture/ids")
+        def ids():
+            return {"movie": mid, "series": sid}
 
         @app.post("/__fixture/mode")
         async def mode(request: Request):

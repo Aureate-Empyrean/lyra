@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from conftest import CurrentRevisionClient
 from lyra.app import create_app
 
 KEY = "k" * 40
@@ -218,7 +218,7 @@ def env(tmp_path, monkeypatch):
         clock=lambda: NOW,
         workers=False,
     )
-    with TestClient(app, headers=GW) as client:
+    with CurrentRevisionClient(app, headers=GW) as client:
         yield client, app, provider, nexus, tmp_path
 
 
@@ -350,7 +350,9 @@ def test_same_title_by_another_provider_id_is_not_duplicated(ready):
     ).json()
     provider.movies[604] = {**copy.deepcopy(MOVIE), "id": 604}  # same IMDb identity
     second = client.post(
-        "/api/library", json={"kind": "movie", "tmdb_id": 604, "status": "planned"}
+        "/api/library",
+        json={"kind": "movie", "tmdb_id": 604, "status": "planned"},
+        params={"expected_revision": first["revision"]},
     ).json()
     assert second["id"] == first["id"]
     assert client.get("/api/library?type=movie").json()["items"].__len__() == 1

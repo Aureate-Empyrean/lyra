@@ -44,6 +44,15 @@ CREATE INDEX history_time ON history(watched_at);
 CREATE TABLE outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT NOT NULL, path TEXT NOT NULL,
  body TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0);
 """,
+    # Personal state is versioned independently from provider metadata. Tokens survive
+    # removal from the library so remove/re-add cannot resurrect an old precondition.
+    """
+CREATE TABLE personal_revisions(resource_type TEXT NOT NULL, resource_id TEXT NOT NULL,
+ revision TEXT NOT NULL, PRIMARY KEY(resource_type, resource_id));
+INSERT INTO personal_revisions SELECT 'movie',id,lower(hex(randomblob(16))) FROM movies;
+INSERT INTO personal_revisions SELECT 'series',id,lower(hex(randomblob(16))) FROM series;
+INSERT INTO personal_revisions VALUES('settings','global',lower(hex(randomblob(16))));
+""",
 ]
 
 
@@ -65,10 +74,12 @@ class Database:
                 )
 
     @contextmanager
-    def connect(self):
+    def connect(self, snapshot=False):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
+        if snapshot:
+            db.execute("BEGIN")
         try:
             with db:
                 yield db

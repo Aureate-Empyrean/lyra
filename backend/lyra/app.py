@@ -40,6 +40,7 @@ from lyra.library import (
     uuid7,
     watched_episodes,
 )
+from lyra.personal import claim, revision
 from lyra.tmdb import ATTRIBUTION, TMDB, Credential, TMDBError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -158,11 +159,11 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return clock().date().isoformat()
 
     def settings():
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             stored = {
                 r["key"]: json.loads(r["value"]) for r in conn.execute("SELECT * FROM settings")
             }
-        return {**DEFAULT_SETTINGS, **stored}
+            return {**DEFAULT_SETTINGS, **stored, "revision": revision(conn, "settings", "global")}
 
     def announce(conn):
         """Hint for Chronos; consumers reconcile through the projection either way."""
@@ -199,7 +200,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return details, seasons, len(seasons) == len(numbers)
 
     def refresh(resource_type, resource_id):
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             tmdb_id = conn.execute(
                 "SELECT external_id FROM external_ids WHERE provider='tmdb' AND resource_type=? AND resource_id=?",
                 (resource_type, resource_id),
@@ -208,21 +209,21 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return
         if resource_type == "movie":
             details = tmdb.movie(tmdb_id[0], settings()["language"])
-            with db.connect() as conn:
+            with db.connect(snapshot=True) as conn:
                 before = dates_signature(conn, movie_id=resource_id)
                 upsert_movie(conn, details)
                 if dates_signature(conn, movie_id=resource_id) != before:
                     announce(conn)
             return
         details, seasons, complete = fetch_series(tmdb_id[0])
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             before = dates_signature(conn, series_id=resource_id)
             upsert_series(conn, details, seasons, complete)
             if dates_signature(conn, series_id=resource_id) != before:
                 announce(conn)
 
     def due_refreshes():
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             rows = [
                 ("series", r["id"])
                 for r in conn.execute("SELECT id FROM series WHERE refresh_requested=1")
@@ -259,7 +260,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return []
 
     def flush():
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             entries = conn.execute(
                 "SELECT * FROM outbox WHERE next_attempt<=? ORDER BY id LIMIT 20", (time.time(),)
             ).fetchall()
@@ -271,13 +272,13 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                     json.loads(entry["body"]) if entry["body"] else None,
                 )
             except (httpx.HTTPError, KeyError, OSError):
-                with db.connect() as conn:
+                with db.connect(snapshot=True) as conn:
                     conn.execute(
                         "UPDATE outbox SET attempts=attempts+1,next_attempt=? WHERE id=?",
                         (time.time() + min(300, 2 ** min(entry["attempts"] + 1, 8)), entry["id"]),
                     )
                 continue
-            with db.connect() as conn:
+            with db.connect(snapshot=True) as conn:
                 conn.execute("DELETE FROM outbox WHERE id=?", (entry["id"],))
 
     def tick():
@@ -286,7 +287,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
                 try:
                     refresh(resource_type, resource_id)
                 except TMDBError as exc:
-                    with db.connect() as conn:
+                    with db.connect(snapshot=True) as conn:
                         # Keep the data; try again later rather than hammering the provider.
                         table = "series" if resource_type == "series" else "movies"
                         conn.execute(
@@ -376,6 +377,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         value = {
             "type": resource_type,
             "id": row["id"],
+            "revision": revision(conn, resource_type, row["id"]),
             "title": row["title"],
             "year": (
                 row["release_date"] if resource_type == "movie" else row["first_air_date"] or ""
@@ -398,6 +400,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return {
             "type": "movie",
             "id": movie_id,
+            "revision": revision(conn, "movie", movie_id),
             "reference": reference("movie", movie_id),
             "title": row["title"],
             "original_title": row["original_title"],
@@ -480,6 +483,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return {
             "type": "series",
             "id": series_id,
+            "revision": revision(conn, "series", series_id),
             "reference": reference("series", series_id),
             "title": row["title"],
             "original_title": row["original_title"],
@@ -554,11 +558,12 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         }
 
     @app.put("/api/settings")
-    def put_settings(body: SettingsBody):
+    def put_settings(body: SettingsBody, expected_revision: str | None = None):
         changes = body.model_dump(exclude_none=True)
         if {"region", "language"} & set(changes):
             changes["defaults_set"] = True
         with db.connect() as conn:
+            claim(conn, "settings", "global", expected_revision)
             for key, value in changes.items():
                 conn.execute(
                     "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -585,7 +590,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
     def home():
         now = today()
         horizon = (date.fromisoformat(now) + timedelta(days=60)).isoformat()
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             watching = []
             for row in conn.execute(
                 "SELECT s.* FROM series s JOIN library l ON l.resource_type='series' AND l.resource_id=s.id "
@@ -659,6 +664,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return m and {
                 "id": h["id"],
                 "watched_at": h["watched_at"],
+                "revision": revision(conn, "movie", m["id"]),
                 "type": "movie",
                 "resource_id": m["id"],
                 "title": m["title"],
@@ -671,6 +677,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return e and {
             "id": h["id"],
             "watched_at": h["watched_at"],
+            "revision": revision(conn, "series", e["series_id"]),
             "type": "episode",
             "resource_id": e["series_id"],
             "episode_id": e["id"],
@@ -685,7 +692,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         if type not in {"series", "movie"}:
             raise HTTPException(422, "Unknown library")
         table = "series" if type == "series" else "movies"
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             rows = conn.execute(
                 f"SELECT t.* FROM {table} t JOIN library l ON l.resource_type=? AND l.resource_id=t.id ORDER BY l.updated_at DESC",
                 (type,),
@@ -694,7 +701,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
 
     @app.get("/api/history")
     def history(limit: int = 50, before: str = "9999"):
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             rows = conn.execute(
                 "SELECT * FROM history WHERE watched_at<? ORDER BY watched_at DESC LIMIT ?",
                 (before, max(1, min(limit, 200))),
@@ -702,11 +709,16 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return {"entries": [e for e in (history_entry(conn, h) for h in rows) if e]}
 
     @app.delete("/api/history/{hid}")
-    def delete_history(hid: str):
+    def delete_history(hid: str, expected_revision: str | None = None):
         with db.connect() as conn:
             row = conn.execute("SELECT * FROM history WHERE id=?", (hid,)).fetchone()
             if not row:
-                raise HTTPException(404, "History entry not found")
+                raise HTTPException(409, "[LYRA_CONFLICT] This history entry was already removed.")
+            if row["resource_type"] == "movie":
+                kind, rid = "movie", row["resource_id"]
+            else:
+                kind, rid = "series", episode(conn, row["resource_id"])["series_id"]
+            claim(conn, kind, rid, expected_revision)
             conn.execute("DELETE FROM history WHERE id=?", (hid,))
             if (
                 row["resource_type"] == "movie"
@@ -727,7 +739,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         if len(query) < 2:
             return {"local": [], "remote": [], "remote_error": None}
         pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             local = [
                 card(conn, t, r)
                 for t, table in (("series", "series"), ("movie", "movies"))
@@ -839,7 +851,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         announce(conn)
 
     @app.post("/api/library", status_code=201)
-    def add(body: AddBody):
+    def add(body: AddBody, expected_revision: str | None = None):
         allowed = MOVIE_STATUSES if body.kind == "movie" else SERIES_STATUSES
         if body.status not in allowed:
             raise HTTPException(422, "Unknown status")
@@ -848,6 +860,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             details = tmdb.movie(body.tmdb_id, language)
             with db.connect() as conn:
                 movie_id = upsert_movie(conn, details)
+                claim(conn, "movie", movie_id, expected_revision or "0")
                 touch(conn, "movie", movie_id, body.status)
                 if (
                     body.status == "watched"
@@ -866,17 +879,18 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             series_id = upsert_series(conn, details, seasons, complete)
             if not complete:
                 conn.execute("UPDATE series SET refresh_requested=1 WHERE id=?", (series_id,))
+            claim(conn, "series", series_id, expected_revision or "0")
             touch(conn, "series", series_id, body.status)
             return series_json(conn, series_id)
 
     @app.get("/api/movies/{mid}")
     def read_movie(mid: str):
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             return movie_json(conn, mid)
 
     @app.get("/api/series/{sid}")
     def read_series(sid: str):
-        with db.connect() as conn:
+        with db.connect(snapshot=True) as conn:
             return series_json(conn, sid)
 
     def kind_table(resource_type):
@@ -885,12 +899,20 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return "movies" if resource_type == "movie" else "series"
 
     @app.put("/api/library/{resource_type}/{rid}")
-    def update_entry(resource_type: str, rid: str, body: EntryPatch):
+    def update_entry(
+        resource_type: str, rid: str, body: EntryPatch, expected_revision: str | None = None
+    ):
         table = kind_table(resource_type)
         allowed = MOVIE_STATUSES if resource_type == "movie" else SERIES_STATUSES
         if body.status and body.status not in allowed:
             raise HTTPException(422, "Unknown status")
         with db.connect() as conn:
+            claim(conn, resource_type, rid, expected_revision)
+            if not entry(conn, resource_type, rid):
+                raise HTTPException(
+                    409,
+                    "[LYRA_CONFLICT] This title was removed from your library. Your edit was not saved.",
+                )
             if not conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (rid,)).fetchone():
                 raise HTTPException(404, "Not found")
             fields = body.model_dump(exclude_none=True, exclude={"status"})
@@ -900,9 +922,16 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return movie_json(conn, rid) if resource_type == "movie" else series_json(conn, rid)
 
     @app.delete("/api/library/{resource_type}/{rid}")
-    def remove_entry(resource_type: str, rid: str, history: str = "keep"):
+    def remove_entry(
+        resource_type: str, rid: str, history: str = "keep", expected_revision: str | None = None
+    ):
         kind_table(resource_type)
         with db.connect() as conn:
+            claim(conn, resource_type, rid, expected_revision)
+            if not entry(conn, resource_type, rid):
+                raise HTTPException(
+                    409, "[LYRA_CONFLICT] This title was already removed from your library."
+                )
             conn.execute(
                 "DELETE FROM library WHERE resource_type=? AND resource_id=?", (resource_type, rid)
             )
@@ -934,8 +963,9 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return now_iso()
 
     @app.post("/api/movies/{mid}/watch", status_code=201)
-    def watch_movie(mid: str, body: WatchBody | None = None):
+    def watch_movie(mid: str, body: WatchBody | None = None, expected_revision: str | None = None):
         with db.connect() as conn:
+            claim(conn, "movie", mid, expected_revision)
             if not conn.execute("SELECT 1 FROM movies WHERE id=?", (mid,)).fetchone():
                 raise HTTPException(404, "Movie not found")
             conn.execute(
@@ -981,9 +1011,12 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         return row
 
     @app.post("/api/episodes/{eid}/watch", status_code=201)
-    def watch_episode(eid: str, body: WatchBody | None = None):
+    def watch_episode(
+        eid: str, body: WatchBody | None = None, expected_revision: str | None = None
+    ):
         with db.connect() as conn:
             e = episode(conn, eid)
+            claim(conn, "series", e["series_id"], expected_revision)
             conn.execute(
                 "INSERT INTO history(id,resource_type,resource_id,watched_at,created_at) VALUES(?,?,?,?,?)",
                 (uuid7(), "episode", eid, stamp_value(body), now_iso()),
@@ -991,19 +1024,21 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return series_after_watch(conn, e["series_id"])
 
     @app.delete("/api/episodes/{eid}/watch")
-    def unwatch_episode(eid: str):
+    def unwatch_episode(eid: str, expected_revision: str | None = None):
         with db.connect() as conn:
             e = episode(conn, eid)
+            claim(conn, "series", e["series_id"], expected_revision)
             conn.execute(
                 "DELETE FROM history WHERE resource_type='episode' AND resource_id=?", (eid,)
             )
             return series_json(conn, e["series_id"])
 
     @app.post("/api/episodes/{eid}/watch-through", status_code=201)
-    def watch_through(eid: str):
+    def watch_through(eid: str, expected_revision: str | None = None):
         """Mark every aired regular episode up to and including this one."""
         with db.connect() as conn:
             target = episode(conn, eid)
+            claim(conn, "series", target["series_id"], expected_revision)
             ids = [
                 e["id"]
                 for e in regular_episodes(conn, target["series_id"])
@@ -1015,11 +1050,12 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return series_after_watch(conn, target["series_id"])
 
     @app.post("/api/seasons/{season_id}/watch", status_code=201)
-    def watch_season(season_id: str):
+    def watch_season(season_id: str, expected_revision: str | None = None):
         with db.connect() as conn:
             s = conn.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
             if not s:
                 raise HTTPException(404, "Season not found")
+            claim(conn, "series", s["series_id"], expected_revision)
             ids = [
                 r["id"]
                 for r in conn.execute(
@@ -1031,11 +1067,12 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             return series_after_watch(conn, s["series_id"])
 
     @app.delete("/api/seasons/{season_id}/watch")
-    def unwatch_season(season_id: str):
+    def unwatch_season(season_id: str, expected_revision: str | None = None):
         with db.connect() as conn:
             s = conn.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
             if not s:
                 raise HTTPException(404, "Season not found")
+            claim(conn, "series", s["series_id"], expected_revision)
             conn.execute(
                 "DELETE FROM history WHERE resource_type='episode' AND resource_id IN (SELECT id FROM episodes WHERE season_id=?)",
                 (season_id,),
@@ -1283,6 +1320,12 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             }
             if not {"movies", "series", "episodes", "library", "history"} <= tables:
                 raise ValueError("Backup is missing Lyra data")
+            if schema >= 2:
+                if "personal_revisions" not in tables:
+                    raise ValueError("Backup is missing personal revisions")
+                snapshot.execute(
+                    "SELECT resource_type,resource_id,revision FROM personal_revisions LIMIT 0"
+                )
         except sqlite3.Error as exc:
             raise ValueError("Backup is not a readable database") from exc
         finally:
@@ -1338,6 +1381,13 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
             snapshot.close()
         db.migrate()
         with db.connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO personal_revisions SELECT 'movie',id,'0' FROM movies"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO personal_revisions SELECT 'series',id,'0' FROM series"
+            )
+            conn.execute("UPDATE personal_revisions SET revision=lower(hex(randomblob(16)))")
             conn.execute("DELETE FROM outbox")
             announce(conn)
 
@@ -1397,6 +1447,7 @@ def create_app(data_dir=None, nexus=None, tmdb_transport=None, clock=None, worke
         script = "\n".join(
             [
                 script,
+                (ROOT / "frontend/personal.js").read_text(encoding="utf-8"),
                 (ROOT / "frontend/vendor/nexus-navigation.js").read_text(encoding="utf-8"),
                 (ROOT / "frontend/navigation.js").read_text(encoding="utf-8"),
             ]

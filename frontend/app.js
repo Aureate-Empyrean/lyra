@@ -107,8 +107,9 @@ function bridge(action, data = {}) {
     parent.postMessage({ channel: "empyrean-v1", id, action, ...data }, "*");
   });
 }
-const api = (path, method = "GET", body) =>
+const rawApi = (path, method = "GET", body) =>
   bridge("request", { path: "/api" + path, method, ...(body === undefined ? {} : { body }) });
+const api = (path, method = "GET", body, snapshot) => personalRequest(path, method, body, snapshot);
 
 /* ───────────────────────── State and formatting ───────────────────────── */
 
@@ -315,7 +316,7 @@ function cardHtml(item) {
   const badge = library ? `<span class="badge ae-pill ${library.status === "watching" ? "ae-pill--accent" : ""}">${esc(statusLabel(library.status, item.type || (item.kind === "movie" ? "movie" : "series")))}</span>` : "";
   const target = item.id ? `data-open="${item.type}:${esc(item.id)}"` : item.resource ? `data-open="${item.resource.type}:${esc(item.resource.id)}"` : `data-preview="${item.kind}:${item.tmdb_id}"`;
   const sub = [item.year, item.kind ? (item.kind === "tv" ? t("Series") : t("Movie")) : null, progress && progress.total ? t("{watched} of {total}", { watched: progress.watched, total: progress.total }) : null].filter(Boolean).join(" · ");
-  return `<button class="card" ${target}>${badge}${art(item.poster, item.title)}${progress && progress.total ? `<div class="bar"><span style="width:${Math.round((progress.watched / progress.total) * 100)}%"></span></div>` : ""}<span class="name" title="${esc(item.title)}">${esc(item.title)}</span><span class="sub">${esc(sub)}</span></button>`;
+  return `<button class="card" ${personalAttributes(item)} ${target}>${badge}${art(item.poster, item.title)}${progress && progress.total ? `<div class="bar"><span style="width:${Math.round((progress.watched / progress.total) * 100)}%"></span></div>` : ""}<span class="name" title="${esc(item.title)}">${esc(item.title)}</span><span class="sub">${esc(sub)}</span></button>`;
 }
 function onboarding() {
   return `<section class="onboard"><div><h2>${esc(t("Connect a metadata provider"))}</h2><p>${esc(t("Lyra uses TMDB to find films and series, their seasons, episodes and release dates. Add your own TMDB read access token; it stays on your server and is never shown again."))}</p></div><button class="ae-btn ae-btn--primary ae-btn--lg" data-act="settings">${icon("key")}<span>${esc(t("Add TMDB credential"))}</span></button></section>`;
@@ -330,7 +331,7 @@ async function homeView() {
     const leadNext = lead.next;
     const leadLine = leadNext ? `${episodeCode(leadNext)} · ${leadNext.name || t("Episode {n}", { n: leadNext.episode_number })}` : t("All caught up");
     const leadWhen = !leadNext ? "" : leadNext.state === "available" ? t("Ready to watch") : leadNext.state === "upcoming" ? t("Airs {when}", { when: whenLabel(leadNext.air_date) }) : t("Air date not announced");
-    parts.push(`<section class="spotlight" style="--h:${hue(lead.title)}">${art(lead.backdrop || lead.poster, lead.title, "spotlight-art")}<div class="spotlight-body"><span class="ae-eyebrow">${esc(t("Continue watching"))}</span><h1 data-open="series:${esc(lead.id)}">${esc(lead.title)}</h1><p class="spotlight-ep">${esc(leadLine)}</p><p class="spotlight-meta">${esc(leadWhen)}${lead.progress.total ? ` · ${esc(t("{watched} of {total} episodes", { watched: lead.progress.watched, total: lead.progress.total }))}` : ""}</p><div class="ae-progress spotlight-progress"><span style="width:${lead.progress.total ? Math.round((lead.progress.watched / lead.progress.total) * 100) : 0}%"></span></div><div class="spotlight-actions">${leadNext && leadNext.state === "available" ? `<button class="ae-btn ae-btn--primary ae-btn--lg" data-act="watch-episode" data-id="${esc(leadNext.id)}" data-series="${esc(lead.id)}">${icon("check")}<span>${esc(t("Mark {code} watched", { code: episodeCode(leadNext) }))}</span></button>` : ""}<button class="ae-btn ae-btn--lg" data-open="series:${esc(lead.id)}">${esc(t("Open series"))}</button></div></div><div class="spotlight-poster" data-open="series:${esc(lead.id)}">${art(lead.poster, lead.title)}</div></section>`);
+    parts.push(`<section class="spotlight" ${personalAttributes(lead)} style="--h:${hue(lead.title)}">${art(lead.backdrop || lead.poster, lead.title, "spotlight-art")}<div class="spotlight-body"><span class="ae-eyebrow">${esc(t("Continue watching"))}</span><h1 data-open="series:${esc(lead.id)}">${esc(lead.title)}</h1><p class="spotlight-ep">${esc(leadLine)}</p><p class="spotlight-meta">${esc(leadWhen)}${lead.progress.total ? ` · ${esc(t("{watched} of {total} episodes", { watched: lead.progress.watched, total: lead.progress.total }))}` : ""}</p><div class="ae-progress spotlight-progress"><span style="width:${lead.progress.total ? Math.round((lead.progress.watched / lead.progress.total) * 100) : 0}%"></span></div><div class="spotlight-actions">${leadNext && leadNext.state === "available" ? `<button class="ae-btn ae-btn--primary ae-btn--lg" data-act="watch-episode" data-id="${esc(leadNext.id)}" data-series="${esc(lead.id)}">${icon("check")}<span>${esc(t("Mark {code} watched", { code: episodeCode(leadNext) }))}</span></button>` : ""}<button class="ae-btn ae-btn--lg" data-open="series:${esc(lead.id)}">${esc(t("Open series"))}</button></div></div><div class="spotlight-poster" data-open="series:${esc(lead.id)}">${art(lead.poster, lead.title)}</div></section>`);
   }
   if (home.watching.length > 1) {
     parts.push(`<section class="section"><div class="section-head"><h2>${esc(t("Also watching"))}</h2></div><div class="continue">${home.watching
@@ -345,7 +346,7 @@ async function homeView() {
           action = `<button class="ae-btn ae-btn--sm ae-btn--primary" data-act="watch-episode" data-id="${esc(next.id)}" data-series="${esc(s.id)}">${icon("check")}<span>${esc(t("Watched"))}</span></button>`;
         } else if (next && next.state === "upcoming") line = t("{code} airs {when}", { code: episodeCode(next), when: whenLabel(next.air_date) });
         else if (next) line = t("{code} · date not announced", { code: episodeCode(next) });
-        return `<article class="episode-card"><div data-open="series:${esc(s.id)}">${art(s.poster, s.title)}</div><div class="body"><span class="title" data-open="series:${esc(s.id)}">${esc(s.title)}</span><span class="ep">${esc(line)}</span><div class="actions"><div class="ae-progress" title="${esc(t("{watched} of {total} episodes", { watched: p.watched, total: p.total }))}"><span style="width:${p.total ? Math.round((p.watched / p.total) * 100) : 0}%"></span></div>${action}</div></div></article>`;
+        return `<article class="episode-card" ${personalAttributes(s)}><div data-open="series:${esc(s.id)}">${art(s.poster, s.title)}</div><div class="body"><span class="title" data-open="series:${esc(s.id)}">${esc(s.title)}</span><span class="ep">${esc(line)}</span><div class="actions"><div class="ae-progress" title="${esc(t("{watched} of {total} episodes", { watched: p.watched, total: p.total }))}"><span style="width:${p.total ? Math.round((p.watched / p.total) * 100) : 0}%"></span></div>${action}</div></div></article>`;
       })
       .join("")}</div></section>`);
   }
@@ -366,7 +367,7 @@ function releaseLabel(kind) {
 }
 function historyRow(e) {
   const label = e.type === "episode" ? `${e.label}${e.name ? " · " + e.name : ""}` : t("Movie");
-  return `<div class="list-row" data-open="${e.type === "movie" ? "movie" : "series"}:${esc(e.resource_id)}" role="button" tabindex="0">${art(e.poster, e.title)}<span><span class="t">${esc(e.title)}</span><span class="m">${esc(label)}</span></span><span class="end"><span>${esc(fmtWhen(e.watched_at))}</span><button class="ae-btn ae-btn--quiet ae-btn--icon ae-btn--sm" data-act="delete-history" data-id="${esc(e.id)}" aria-label="${esc(t("Remove from history"))}">${icon("x")}</button></span></div>`;
+  return `<div class="list-row" ${personalAttributes(e)} data-open="${e.type === "movie" ? "movie" : "series"}:${esc(e.resource_id)}" role="button" tabindex="0">${art(e.poster, e.title)}<span><span class="t">${esc(e.title)}</span><span class="m">${esc(label)}</span></span><span class="end"><span>${esc(fmtWhen(e.watched_at))}</span><button class="ae-btn ae-btn--quiet ae-btn--icon ae-btn--sm" data-act="delete-history" data-id="${esc(e.id)}" aria-label="${esc(t("Remove from history"))}">${icon("x")}</button></span></div>`;
 }
 
 async function libraryView(type) {
@@ -476,7 +477,7 @@ async function titleView() {
 }
 function heroHtml(data, actions, meta) {
   const backdrop = data.backdrop || data.poster;
-  return `<section class="hero" style="--h:${hue(data.title)}">${backdrop ? `<div class="backdrop ${data.backdrop ? "" : "from-poster"}" data-img="${esc(backdrop)}" data-backdrop></div>` : ""}<div class="hero-inner">${art(data.poster, data.title)}<div class="hero-text">
+  return `<section class="hero" ${personalAttributes(data)} style="--h:${hue(data.title)}">${backdrop ? `<div class="backdrop ${data.backdrop ? "" : "from-poster"}" data-img="${esc(backdrop)}" data-backdrop></div>` : ""}<div class="hero-inner">${art(data.poster, data.title)}<div class="hero-text">
     <h1>${esc(data.title)}</h1><div class="meta">${meta.filter(Boolean).map((m) => `<span class="meta-chip">${m}</span>`).join("")}</div>
     ${data.tagline ? `<p class="tagline">${esc(data.tagline)}</p>` : ""}${data.overview ? `<p class="overview">${esc(data.overview)}</p>` : ""}
     <div class="actions">${actions}</div></div></div></section>`;
@@ -506,7 +507,7 @@ function sidePanels(data) {
   const crew = (data.credits?.crew || []).slice(0, 4);
   return `<aside class="aside">
     ${data.library ? `<section class="panel"><h3>${esc(t("Your rating"))}</h3>${ratingHtml(data.library, data.type, data.id)}</section>` : ""}
-    ${data.library ? `<section class="panel"><h3>${esc(t("Notes"))}</h3><textarea class="ae-textarea notes" data-notes="${data.type}:${esc(data.id)}" maxlength="10000" placeholder="${esc(t("Only you see these."))}">${esc(data.library.notes)}</textarea></section>` : ""}
+    ${data.library ? `<section class="panel"><h3>${esc(t("Notes"))}</h3><textarea class="ae-textarea notes" data-notes="${data.type}:${esc(data.id)}" data-revision="${esc(data.revision)}" maxlength="10000" placeholder="${esc(t("Only you see these."))}">${esc(data.library.notes)}</textarea></section>` : ""}
     ${data.library ? `<section class="panel"><h3>${esc(t("Calendar"))}</h3><select class="ae-select" data-act="calendar" data-type="${data.type}" data-id="${esc(data.id)}"><option value="default" ${data.library.calendar === "default" ? "selected" : ""}>${esc(t("Follow sharing settings"))}</option><option value="always" ${data.library.calendar === "always" ? "selected" : ""}>${esc(t("Always share dates with Chronos"))}</option><option value="never" ${data.library.calendar === "never" ? "selected" : ""}>${esc(t("Never share dates"))}</option></select><div id="planned" class="ae-meta" style="margin-top:10px"></div></section>` : ""}
     <section class="panel" id="linked-panel" hidden><h3>${esc(t("Linked from other modules"))}</h3><div id="linked-from"></div><p class="ae-meta">${esc(t("These items belong to their modules."))}</p></section>
     <section class="panel"><h3>${esc(t("Details"))}</h3><dl class="facts">${crew.map((c) => `<div><dt>${esc(c.job)}</dt><dd>${esc(c.name)}</dd></div>`).join("")}${data.networks?.length ? `<div><dt>${esc(t("Network"))}</dt><dd>${esc(data.networks.join(", "))}</dd></div>` : ""}${data.original_title && data.original_title !== data.title ? `<div><dt>${esc(t("Original title"))}</dt><dd>${esc(data.original_title)}</dd></div>` : ""}<div><dt>TMDB</dt><dd class="ae-mono">${esc(ext.tmdb || "—")}</dd></div>${ext.imdb ? `<div><dt>IMDb</dt><dd class="ae-mono">${esc(ext.imdb)}</dd></div>` : ""}<div><dt>${esc(t("Updated"))}</dt><dd>${data.refreshing ? esc(t("Refreshing…")) : data.refreshed_at ? esc(fmtWhen(data.refreshed_at)) : "—"}</dd></div></dl></section>
@@ -577,6 +578,7 @@ document.addEventListener("click", (event) => {
   if (el) bridge("navigate", { module: el.dataset.openModule, ...(el.dataset.path ? { path: el.dataset.path } : {}) }).catch((e) => toast(e.message, "danger"));
 });
 afterRender.title = async () => {
+  restoreNoteDraft();
   const data = state.title;
   if (!data || state.route.preview) return;
   loadLinkedFrom(data);
@@ -755,7 +757,7 @@ async function afterSeriesChange(result) {
     toast(t("You have seen every episode of {title}.", { title: result.title }), "", {
       label: t("Mark completed"),
       run: async () => {
-        await attempt(() => api(`/library/series/${result.id}`, "PUT", { status: "completed" }));
+        await attempt(() => api(`/library/series/${result.id}`, "PUT", { status: "completed" }, { kind: "series", id: result.id, revision: result.revision }));
         refreshTitle();
       },
     });
@@ -770,7 +772,8 @@ function titleMenu(anchor) {
       danger: true,
       run: () =>
         confirmAction(t("Remove {title} from your library?", { title: data.title }), t("Your rating, notes and status are removed. Viewing history is kept unless you also clear it from History."), t("Remove"), async () => {
-          await attempt(() => api(`/library/${data.type}/${data.id}`, "DELETE"), t("Removed from library"));
+          const removed = await attempt(() => api(`/library/${data.type}/${data.id}`, "DELETE", undefined, { kind: data.type, id: data.id, revision: data.revision }), t("Removed from library"));
+          if (!removed) return;
           await reloadState();
           back();
         }),
@@ -861,13 +864,14 @@ document.addEventListener("click", async (event) => {
     return afterSeriesChange(await attempt(() => api(`/seasons/${id}/watch`, act === "watch-season" ? "POST" : "DELETE")));
   }
   if (act === "episode-menu") {
+    const snapshot = elementSnapshot($("#view .hero"));
     const episode = state.title.seasons.flatMap((s) => s.episodes).find((e) => e.id === id);
     const season = state.title.seasons.find((s) => s.episodes.includes(episode));
     state.openSeason = season?.id;
     return openMenu(target, [
-      { label: t("Watched up to here"), icon: "check", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch-through`, "POST"))) },
-      { label: episode.watched ? t("Watched it again") : t("Mark watched"), icon: "history", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch`, "POST", {}))) },
-      ...(episode.watched ? [{ label: t("Mark unwatched"), icon: "x", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch`, "DELETE"))) }] : []),
+      { label: t("Watched up to here"), icon: "check", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch-through`, "POST", undefined, snapshot))) },
+      { label: episode.watched ? t("Watched it again") : t("Mark watched"), icon: "history", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch`, "POST", {}, snapshot))) },
+      ...(episode.watched ? [{ label: t("Mark unwatched"), icon: "x", run: async () => afterSeriesChange(await attempt(() => api(`/episodes/${id}/watch`, "DELETE", undefined, snapshot))) }] : []),
     ]);
   }
   if (act === "rate") {
@@ -898,11 +902,8 @@ document.addEventListener(
   async (event) => {
     const notes = event.target.closest?.("[data-notes]");
     if (!notes) return;
-    const [type, id] = notes.dataset.notes.split(":");
-    if (state.title?.library?.notes === notes.value) return;
-    const result = await attempt(() => api(`/library/${type}/${id}`, "PUT", { notes: notes.value }), t("Notes saved"));
-    // A response that arrives after a move to another title belongs to the old one.
-    if (result && state.route.id === id) state.title = result;
+    try { await savePersonalNotes(notes); }
+    catch (error) { toast(error.message, "danger"); }
   },
   true,
 );
